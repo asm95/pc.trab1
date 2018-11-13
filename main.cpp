@@ -1,7 +1,6 @@
 #include <SFML/Graphics.hpp>
 
 #include <cstdlib>
-#include <ctime>
 
 #include <pthread.h>
 
@@ -11,15 +10,29 @@
 
 #define ERR_SPR_LOAD "(E) Error on loading sprites from folder. Exiting..."
 
+sf::Texture *monkey_texture_set[2];
+float init_pos[2] = {30.f, 540.f};
+
 class Monkey {
     public:
         Monkey(int side, int id){
             this->side = side;
             this->id = id;
+            this->visible = false;
+            this->pos_x = init_pos[side];
+            this->speed = 90.f;
+
+            sprite.setTexture(*monkey_texture_set[side]);
+            sprite.setPosition(sf::Vector2f(this->pos_x, 160.f));
+            sprite.setScale(sf::Vector2f(0.2f, 0.2f));
         };
         ~Monkey();
         int side;
         int id;
+        float pos_x, pos_y;
+        float speed;
+        bool visible;
+        sf::Sprite sprite;
     private:
 };
 
@@ -27,11 +40,12 @@ class Monkey {
 #define MAX_MONKEY_COUNT 10
 
 pthread_mutex_t global_bridge_access_lock[2];   // locks the bridge access for a side
-pthread_mutex_t global_va_state_lock;           // locks a C global variable write access
+pthread_mutex_t global_va_state_lock, cond_lock, render_lock;           // locks a C global variable write access
+pthread_cond_t global_cond_transfered = PTHREAD_COND_INITIALIZER; //
 uint monkey_count[2] = {0};             // how many monkeys are waiting to switch side (if zero, the bridge is released)
 uint monkey_transfer_count[2] = {0};    // how many monkeys actually crossed the bridge until no one left
 const char *open_text = "(I) Portal from %s to %s opened.\n";
-const char *transfer_text = "(I) Transfered %d monkeys from %s.\n";
+const char *transfer_text = "(I) Transfering %d monkeys from %s.\n";
 const char *state_text[2] = {AS_COLOR(COLOR_GREEN,"left"),AS_COLOR(COLOR_BLUE,"right")};
 
 void *monkey_loop(void *args){
@@ -46,16 +60,52 @@ void *monkey_loop(void *args){
         pthread_mutex_unlock(&global_bridge_access_lock[m->side]);              // so only my side shall pass
     }
     
+    bool is_last_monkey = false;
+    printf("(I) Monkey from %d,%d will cross...\n", m->side, m->id);
     pthread_mutex_lock(&global_bridge_access_lock[m->side]);
+    printf("(I) Monkey from %d,%d is crossing...\n", m->side, m->id);
     monkey_count[m->side] += -1;
-    monkey_transfer_count[m->side] += 1;   
+    monkey_transfer_count[m->side] += 1;
     //m->side = 1-(m->side);                                                      // monkey knows now it switched side
     if (monkey_count[m->side] == 0){
+        is_last_monkey = true;
         printf(transfer_text, monkey_transfer_count[m->side], state_text[m->side]);
-        monkey_transfer_count[m->side] = 0;
-        pthread_mutex_unlock(&global_bridge_access_lock[1-(m->side)]);          // until all monkeys have made their route safely
+        pthread_mutex_lock(&cond_lock);
+        while( monkey_transfer_count[m->side] != 1 ){
+            pthread_cond_wait(&global_cond_transfered, &cond_lock);
+        }
+        pthread_mutex_unlock(&cond_lock);
     }
     pthread_mutex_unlock(&global_bridge_access_lock[m->side]);
+
+    printf("(I) Monkey %d,%d walking...\n", m->side, m->id);
+    m->visible = true;
+    if (m->side){
+        while(m->sprite.getPosition().x >= init_pos[0]){
+            m->sprite.move(-m->speed, 0); os_sleep(500);
+        }
+    } else {
+        while(m->sprite.getPosition().x <= init_pos[1]){
+            m->sprite.move(m->speed, 0); os_sleep(500);
+        }
+    }
+    m->visible = false;
+    printf("(I) Monkey %d,%d stopped\n", m->side, m->id);
+
+    if (!is_last_monkey){
+        printf("(I) Checking out...\n");
+        pthread_mutex_lock(&cond_lock);
+        monkey_transfer_count[m->side] += -1;
+        printf("(I) Now value is %d\n", monkey_transfer_count[m->side]);
+        pthread_cond_signal(&global_cond_transfered);
+        pthread_mutex_unlock(&cond_lock);
+    } else {
+        printf("(I) Checking all out...\n");
+        monkey_transfer_count[m->side] = 0;
+        pthread_mutex_unlock(&global_bridge_access_lock[1-(m->side)]);          // until all monkeys have made their route safely
+        pthread_mutex_unlock(&global_bridge_access_lock[(m->side)]);          // until all monkeys have made their route safely
+    }
+
 
     pthread_exit(0);
 }
@@ -85,6 +135,9 @@ int main()
         printf(ERR_SPR_LOAD);
         exit(1);
     }
+
+    monkey_texture_set[0] = &crystal_tex;
+    monkey_texture_set[1] = &heart_tex;
 
     // spawn doors
     const float margin_x = 20.f, door_dist = 500.f;
@@ -141,6 +194,11 @@ int main()
         // draw doors
         for (int i=0; i<DOOR_COUNT; i++){
             window.draw(doors_spr[i]);
+        }
+        for (int i=0; i<MAX_MONKEY_COUNT; i++){
+            if (monkey_set[i]->visible){
+                window.draw(monkey_set[i]->sprite);
+            }
         }
 
         window.display();

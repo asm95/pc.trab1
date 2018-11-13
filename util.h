@@ -24,8 +24,8 @@
     // source: https://stackoverflow.com/a/3379146
     #define os_sleep(x) Sleep(x*1000) // time is in millisecs
 #else
-    #include <time.h>
-    #define os_sleep(x) sleep(x)
+    #include <unistd.h>
+    #define os_sleep(x) usleep(x*1000)
 #endif
 
 /* useful types (why not) */
