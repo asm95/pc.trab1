@@ -1,3 +1,11 @@
+/**
+ * Trabalho 1 de Programação Concorrente
+ * 
+ * Cristiano Cardoso 15/0058349
+ * 
+ * Repositório do github: https://github.com/asm95/pc.trab1 
+ *
+*/
 #include <SFML/Graphics.hpp>
 
 #include <cstdlib>

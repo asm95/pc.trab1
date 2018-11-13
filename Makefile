@@ -13,3 +13,7 @@ main.o: main.cpp
 
 clear:
 	rm -f *.o $(PROG_NAME)
+
+pack:
+	chmod +x pack.sh
+	./pack.sh 'trab1'
