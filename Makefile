@@ -1,6 +1,6 @@
 PROG_NAME=cptb
 CXX=g++
-CLIBS=-lsfml-graphics -lsfml-window -lsfml-system
+CLIBS=-lsfml-graphics -lsfml-window -lsfml-system -lpthread
 CFLAGS=--std=c++11
 
 all: $(PROG_NAME)
