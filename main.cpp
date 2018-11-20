@@ -8,6 +8,9 @@
 */
 #include <SFML/Graphics.hpp>
 
+#include <iostream>
+#include <string>
+#include <list>
 #include <cstdlib>
 
 #include <pthread.h>
@@ -15,8 +18,6 @@
 #include "util.h"
 
 #define APP_NAME "PC Toolbox"
-
-#define ERR_SPR_LOAD "(E) Error on loading sprites from folder. Exiting..."
 
 sf::Texture *monkey_texture_set[2];
 float init_pos[2] = {30.f, 540.f};
@@ -118,6 +119,23 @@ void *monkey_loop(void *args){
     pthread_exit(0);
 }
 
+const std::string g_sprite_folder = "sprites";
+const std::string g_font_folder = "fonts";
+void load_sprite_tex(sf::Texture &the_texture, std::string file_name){
+    std::string full_sprite_path = g_sprite_folder+ "/" +file_name;
+    if (!the_texture.loadFromFile(full_sprite_path)){
+        std::cout << "(E) Error on loading image from " << file_name << std::endl;
+        exit(1);
+    }
+}
+void load_font(sf::Font &the_font, std::string file_name){
+    std::string full_sprite_path = g_font_folder+ "/" +file_name;
+    if (!the_font.loadFromFile(full_sprite_path)){
+        std::cout << "(E) Error on loading font from " << file_name << std::endl;
+        exit(1);
+    }
+}
+
 int main()
 {
     const float w_width = 640.f, w_height = 480.f;
@@ -127,26 +145,31 @@ int main()
     sf::Clock frameClock;
     char title_buf[128];
 
-    sf::Texture crystal_tex, heart_tex, door_tex;
-
-    const std::string sprites_folder = "sprites/";
-
-    if (!crystal_tex.loadFromFile(sprites_folder+"crystal.png")){
-        printf(ERR_SPR_LOAD);
-        exit(1);
-    }
-    if (!heart_tex.loadFromFile(sprites_folder+"heart.png")){
-        printf(ERR_SPR_LOAD);
-        exit(1);
-    }
-    if (!door_tex.loadFromFile(sprites_folder+"door.png")){
-        printf(ERR_SPR_LOAD);
-        exit(1);
-    }
+    // create object texture data
+    sf::Texture crystal_tex, heart_tex, door_tex, background_tex;
+    load_sprite_tex(crystal_tex, "crystal.png");
+    load_sprite_tex(heart_tex, "heart.png");
+    load_sprite_tex(door_tex, "door.png");
+    load_sprite_tex(background_tex, "background.png");
 
     monkey_texture_set[0] = &crystal_tex;
     monkey_texture_set[1] = &heart_tex;
 
+    // create debug text
+    std::list<sf::Text> debugTextList;
+    sf::Text text_monkey_cl, text_monkey_cr;
+    sf::Font DebugTextFont;
+    load_font(DebugTextFont, "PCBius.ttf");
+    text_monkey_cl.setPosition(20, 230);
+    text_monkey_cl.setFont(DebugTextFont);
+    text_monkey_cr.setFont(DebugTextFont);
+    text_monkey_cr.setPosition(20, 265);
+    debugTextList.push_back(text_monkey_cl);
+    debugTextList.push_back(text_monkey_cr);
+
+    // spawn background
+    sf::Sprite background_spr;
+    background_spr.setTexture(background_tex);
     // spawn doors
     const float margin_x = 20.f, door_dist = 500.f;
     float floor_aligment = w_height - 400.f;
@@ -161,18 +184,7 @@ int main()
         cur_x += door_dist;
     }
 
-    sf::Sprite crystal_spr, heart_spr;
-    crystal_spr.setTexture(crystal_tex);
-    crystal_spr.setPosition(sf::Vector2f(10.f, 10.f));
-    crystal_spr.setScale(sf::Vector2f(0.2f, 0.2f));
-
-    heart_spr.setTexture(heart_tex);
-    heart_spr.setPosition(sf::Vector2f(20.f, 10.f));
-    heart_spr.setScale(sf::Vector2f(0.2f, 0.2f));
-
-
     std::srand(std::time(nullptr));
-
     // pthread creation thing
     pthread_t thread_pool[MAX_MONKEY_COUNT];
     Monkey *monkey_set[MAX_MONKEY_COUNT];
@@ -182,9 +194,6 @@ int main()
         monkey_set[i] = new Monkey(choise, i);
         pthread_create(&thread_pool[i], NULL, monkey_loop, monkey_set[i]);
     }
-
-    const float limit_x = w_width - ( crystal_spr.getGlobalBounds().width + 20 );
-    float espeed_x = 20.f;
 
     while (window.isOpen())
     {
@@ -196,9 +205,8 @@ int main()
         }
 
         window.clear();
-        window.draw(crystal_spr);
-        window.draw(heart_spr);
-
+        // draw background
+        window.draw(background_spr);
         // draw doors
         for (int i=0; i<DOOR_COUNT; i++){
             window.draw(doors_spr[i]);
@@ -209,16 +217,17 @@ int main()
             }
         }
 
+        // update text
+        text_monkey_cl.setString("Macacos a Esq.: " + std::to_string(monkey_count[0]) );
+        text_monkey_cr.setString("Macacos a Dir.: " + std::to_string(monkey_count[1]) );
+        window.draw(text_monkey_cl);
+        window.draw(text_monkey_cr);
+
         window.display();
 
-        if (crystal_spr.getPosition().x >= limit_x){
-            espeed_x = 0;
-        }
-        crystal_spr.move(espeed_x, 0);
-
         const float time = 1.f / frameClock.getElapsedTime().asSeconds();
+
         sprintf(title_buf, "%s | FPS: %.2f", APP_NAME, time);
-        
         window.setTitle(title_buf);
     }
 
