@@ -11,11 +11,14 @@
 #include <iostream>
 #include <string>
 #include <list>
+#include <cstdio>
 #include <cstdlib>
 
 #include <pthread.h>
 
 #include "util.h"
+
+#include "vendor/inih/cpp/INIReader.h"
 
 #define APP_NAME "PC Toolbox"
 
@@ -42,79 +45,70 @@ class Monkey {
         float speed;
         bool visible;
         sf::Sprite sprite;
+
+        void walk(){
+            printf("(I) Monkey %d,%d walking...\n", side, id);
+            visible = true;
+            if (side){
+                while(sprite.getPosition().x >= init_pos[0]){
+                    sprite.move(-speed, 0); os_sleep(500);
+                }
+            } else {
+                while(sprite.getPosition().x <= init_pos[1]){
+                    sprite.move(speed, 0); os_sleep(500);
+                }
+            }
+            visible = false;
+            printf("(I) Monkey %d,%d stopped\n", side, id);
+        }
     private:
 };
 
 #define DOOR_COUNT 2
 #define MAX_MONKEY_COUNT 10
 
-pthread_mutex_t global_bridge_access_lock[2];   // locks the bridge access for a side
-pthread_mutex_t global_va_state_lock, cond_lock, render_lock;           // locks a C global variable write access
-pthread_cond_t global_cond_transfered = PTHREAD_COND_INITIALIZER; //
+#define mlock pthread_mutex_lock
+#define munlock pthread_mutex_unlock
+#define csignal pthread_cond_signal
+#define cwait pthread_cond_wait
+
+pthread_mutex_t g_bridge_lock[2];   // locks the bridge access for a side
+pthread_mutex_t g_va_state_lock, cond_lock, render_lock;           // locks a C global variable write access
+pthread_cond_t g_cond_okdest = PTHREAD_COND_INITIALIZER; //
 uint monkey_count[2] = {0};             // how many monkeys are waiting to switch side (if zero, the bridge is released)
-uint monkey_transfer_count[2] = {0};    // how many monkeys actually crossed the bridge until no one left
+uint monkey_side_count[2] = {0};    // how many monkeys actually crossed the bridge until no one left
 const char *open_text = "(I) Portal from %s to %s opened.\n";
 const char *transfer_text = "(I) Transfering %d monkeys from %s.\n";
 const char *state_text[2] = {AS_COLOR(COLOR_GREEN,"left"),AS_COLOR(COLOR_BLUE,"right")};
 
 void *monkey_loop(void *args){
     Monkey *m = (Monkey*)args;
-    pthread_mutex_lock(&global_va_state_lock);
+
+    mlock(&g_va_state_lock);
+    monkey_side_count[m->side] += 1;
+    munlock(&g_va_state_lock);
+
+    mlock(&g_bridge_lock[m->side]);
     monkey_count[m->side] += 1;
-    pthread_mutex_unlock(&global_va_state_lock);
-    if (monkey_count[m->side] == 1){
-        pthread_mutex_lock(&global_bridge_access_lock[m->side]);                // if i can lock the brigde
-        pthread_mutex_lock(&global_bridge_access_lock[1-(m->side)]);            // than i lock the other side of the bridge
-        printf(open_text, state_text[m->side], state_text[1-(m->side)]);
-        pthread_mutex_unlock(&global_bridge_access_lock[m->side]);              // so only my side shall pass
-    }
     
-    bool is_last_monkey = false;
+    if (monkey_count[m->side] == 1){
+        printf("Monkey %d,%d requesting for access...\n", m->side, m->id);
+        mlock(&g_bridge_lock[1-(m->side)]);            // than i lock the other side of the bridge
+        printf(open_text, state_text[m->side], state_text[1-(m->side)]);
+    }
+    munlock(&g_bridge_lock[m->side]);
+    
     printf("(I) Monkey from %d,%d will cross...\n", m->side, m->id);
-    pthread_mutex_lock(&global_bridge_access_lock[m->side]);
+    mlock(&g_bridge_lock[m->side]);
     printf("(I) Monkey from %d,%d is crossing...\n", m->side, m->id);
     monkey_count[m->side] += -1;
-    monkey_transfer_count[m->side] += 1;
-    //m->side = 1-(m->side);                                                      // monkey knows now it switched side
+    m->walk();
     if (monkey_count[m->side] == 0){
-        is_last_monkey = true;
-        printf(transfer_text, monkey_transfer_count[m->side], state_text[m->side]);
-        pthread_mutex_lock(&cond_lock);
-        while( monkey_transfer_count[m->side] != 1 ){
-            pthread_cond_wait(&global_cond_transfered, &cond_lock);
-        }
-        pthread_mutex_unlock(&cond_lock);
+        printf("(I) Monkey %d,%d checking all out...\n", m->side, m->id);
+        munlock(&g_bridge_lock[1-(m->side)]);
     }
-    pthread_mutex_unlock(&global_bridge_access_lock[m->side]);
-
-    printf("(I) Monkey %d,%d walking...\n", m->side, m->id);
-    m->visible = true;
-    if (m->side){
-        while(m->sprite.getPosition().x >= init_pos[0]){
-            m->sprite.move(-m->speed, 0); os_sleep(500);
-        }
-    } else {
-        while(m->sprite.getPosition().x <= init_pos[1]){
-            m->sprite.move(m->speed, 0); os_sleep(500);
-        }
-    }
-    m->visible = false;
-    printf("(I) Monkey %d,%d stopped\n", m->side, m->id);
-
-    if (!is_last_monkey){
-        printf("(I) Checking out...\n");
-        pthread_mutex_lock(&cond_lock);
-        monkey_transfer_count[m->side] += -1;
-        printf("(I) Now value is %d\n", monkey_transfer_count[m->side]);
-        pthread_cond_signal(&global_cond_transfered);
-        pthread_mutex_unlock(&cond_lock);
-    } else {
-        printf("(I) Checking all out...\n");
-        monkey_transfer_count[m->side] = 0;
-        pthread_mutex_unlock(&global_bridge_access_lock[1-(m->side)]);          // until all monkeys have made their route safely
-        pthread_mutex_unlock(&global_bridge_access_lock[(m->side)]);          // until all monkeys have made their route safely
-    }
-
+    munlock(&g_bridge_lock[m->side]);
+    printf("(I) Monkey %d,%d exiting...\n", m->side, m->id);
 
     pthread_exit(0);
 }
@@ -136,14 +130,63 @@ void load_font(sf::Font &the_font, std::string file_name){
     }
 }
 
+class ConfManager{
+    private:
+        INIReader *confHandler;
+        std::string file_path;
+    public:
+    ConfManager(std::string confPath){
+        file_path = confPath;
+        confHandler = new INIReader(file_path);
+        if (confHandler->ParseError() < 0) {
+            throw std::runtime_error("Could not read configuration file. It may be corrupted or does not exist");
+        }
+    }
+    ~ConfManager(){
+    }
+    void assert_param_exists(std::string &val, const char *sec, const char *var){
+        if (val.length() == 0){
+            throw std::runtime_error("Could not load parameter (" 
+                + std::string(sec) + "," + std::string(var) + 
+                ") from " + file_path + "."
+            );
+        }
+    }
+    sf::Vector2f get_pos(const char *sec, const char *var){
+        std::string val = confHandler->Get(sec, var, "");
+        assert_param_exists(val, sec, var);
+
+        double x,y;
+        sscanf(val.c_str(), "(%lf,%lf)", &x, &y);
+        return sf::Vector2f(x,y);
+    }
+
+    double get_double(const char *sec, const char *var){
+        std::string val = confHandler->Get(sec, var, "");
+        assert_param_exists(val, sec, var);
+        double a; int r;
+        r = sscanf(val.c_str(), "%lf", &a);
+        if (!r){
+            throw std::runtime_error("Invalid real parameter ("
+                + std::string(sec) + "," + std::string(var) +
+                ") from " + file_path + "."
+            );
+        }
+        return a;
+    }
+};
+
 int main()
 {
     const float w_width = 640.f, w_height = 480.f;
-    sf::RenderWindow window(sf::VideoMode(w_width, w_height), "SFML works!");
+    sf::RenderWindow window(sf::VideoMode(w_width, w_height), APP_NAME " | Loading...");
     window.setFramerateLimit(30u);
 
     sf::Clock frameClock;
     char title_buf[128];
+
+    // load our configuration file
+    ConfManager cm("conf.ini");
 
     // create object texture data
     sf::Texture crystal_tex, heart_tex, door_tex, background_tex;
@@ -160,10 +203,10 @@ int main()
     sf::Text text_monkey_cl, text_monkey_cr;
     sf::Font DebugTextFont;
     load_font(DebugTextFont, "PCBius.ttf");
-    text_monkey_cl.setPosition(20, 230);
+    text_monkey_cl.setPosition(cm.get_pos("debug_text","monkey_cl_pos"));
     text_monkey_cl.setFont(DebugTextFont);
     text_monkey_cr.setFont(DebugTextFont);
-    text_monkey_cr.setPosition(20, 265);
+    text_monkey_cr.setPosition(cm.get_pos("debug_text","monkey_cr_pos"));
     debugTextList.push_back(text_monkey_cl);
     debugTextList.push_back(text_monkey_cr);
 
@@ -172,7 +215,7 @@ int main()
     background_spr.setTexture(background_tex);
     // spawn doors
     const float margin_x = 20.f, door_dist = 500.f;
-    float floor_aligment = w_height - 400.f;
+    const float floor_aligment = w_height - cm.get_double("obj_door","floor_align");
     sf::Sprite doors_spr[DOOR_COUNT];
     float cur_x, cur_y;
     cur_x = margin_x;
@@ -218,8 +261,10 @@ int main()
         }
 
         // update text
-        text_monkey_cl.setString("Macacos a Esq.: " + std::to_string(monkey_count[0]) );
-        text_monkey_cr.setString("Macacos a Dir.: " + std::to_string(monkey_count[1]) );
+        pthread_mutex_lock(&g_va_state_lock);
+        text_monkey_cl.setString("Macacos a Esq.: " + std::to_string(monkey_side_count[0]) );
+        text_monkey_cr.setString("Macacos a Dir..: " + std::to_string(monkey_side_count[1]) );
+        pthread_mutex_unlock(&g_va_state_lock);
         window.draw(text_monkey_cl);
         window.draw(text_monkey_cr);
 
