@@ -19,10 +19,11 @@
 #include "util.h"
 
 #include "vendor/inih/cpp/INIReader.h"
+#include "vendor/anim/AnimatedSprite.hpp"
 
 #define APP_NAME "PC Toolbox"
 
-sf::Texture *monkey_texture_set[2];
+Animation *monkey_anim_set[2];
 
 class Monkey {
     public:
@@ -33,9 +34,10 @@ class Monkey {
             this->pos_x = door_stop[side];
             this->speed = base_speed;
 
-            sprite.setTexture(*monkey_texture_set[side]);
-            sprite.setPosition(sf::Vector2f(this->pos_x, 160.f));
-            sprite.setScale(sf::Vector2f(0.2f, 0.2f));
+            sprite.setFrameTime(sf::seconds(0.05));
+            sprite.play(*monkey_anim_set[side]);
+            sprite.setPosition(sf::Vector2f(this->pos_x, floor_align));
+            sprite.setScale(sf::Vector2f(0.3f * (side ? 1 : -1), 0.3f));
         };
         ~Monkey();
         int side;
@@ -43,10 +45,11 @@ class Monkey {
         float pos_x, pos_y;
         float speed;
         bool visible;
-        sf::Sprite sprite;
+        AnimatedSprite sprite;
         static double door_stop[2];
         static double base_speed;
         static int sleep_intl;
+        static double floor_align;
 
         void walk(){
             printf("(I) Monkey %d,%d walking...\n", side, id);
@@ -60,6 +63,7 @@ class Monkey {
                     sprite.move(speed, 0); os_sleep(sleep_intl);
                 }
             }
+            os_sleep(sleep_intl);
             visible = false;
             printf("(I) Monkey %d,%d stopped\n", side, id);
         }
@@ -68,6 +72,7 @@ class Monkey {
 
 double Monkey::door_stop[] = {0};
 double Monkey::base_speed = 0;
+double Monkey::floor_align = 0;
 int Monkey::sleep_intl = 100;
 
 #define DOOR_COUNT 2
@@ -116,6 +121,10 @@ void *monkey_loop(void *args){
     }
     munlock(&g_bridge_lock[m->side]);
     printf("(I) Monkey %d,%d exiting...\n", m->side, m->id);
+
+    mlock(&g_va_state_lock);
+    monkey_side_count[m->side] += -1;
+    munlock(&g_va_state_lock);
 
     pthread_exit(0);
 }
@@ -201,21 +210,37 @@ int main()
     window.setFramerateLimit(30u);
 
     sf::Clock frameClock;
+    sf::Time frameTime;
     char title_buf[128];
 
     // load our configuration file
     ConfManager cm("conf.ini");
 
     // create object texture data
-    sf::Texture crystal_tex, heart_tex, door_tex, background_tex, plate_tex;
+    sf::Texture crystal_tex, heart_tex, door_tex, background_tex, plate_tex, player1_tex, player2_tex;
     load_sprite_tex(crystal_tex, "crystal.png");
     load_sprite_tex(heart_tex, "heart.png");
     load_sprite_tex(door_tex, "door.png");
     load_sprite_tex(background_tex, "background.png");
     load_sprite_tex(plate_tex, "plate1.png");
+    load_sprite_tex(player1_tex, "1_animation_walk.png");
+    load_sprite_tex(player2_tex, "2_animation_walk.png");
 
-    monkey_texture_set[0] = &crystal_tex;
-    monkey_texture_set[1] = &heart_tex;
+    // create animation data
+    Animation p1Walking, p2Walking;
+    p1Walking.setSpriteSheet(player1_tex);
+    p2Walking.setSpriteSheet(player2_tex);
+    for (int idx=0; idx < 20; idx++){
+        p1Walking.addFrame(sf::IntRect(idx * 282, 0, 282, 350));
+        p2Walking.addFrame(sf::IntRect(idx * 277, 0, 277, 347));
+    }
+    AnimatedSprite p1WalkingAnim(sf::seconds(0.05));
+    AnimatedSprite p2WalkingAnim(sf::seconds(0.05));
+    //p1WalkingAnim.setPosition(sf::Vector2f(300, 300));
+    //p1WalkingAnim.setScale(sf::Vector2f(0.3f,0.3f));
+
+    monkey_anim_set[0] = &p1Walking;
+    monkey_anim_set[1] = &p2Walking;
 
     // create debug text
     std::list<sf::Text> debugTextList;
@@ -260,6 +285,7 @@ int main()
     Monkey::door_stop[1] = cm.get_double("monkey","doorR");
     Monkey::base_speed = cm.get_double("monkey","speed");
     Monkey::sleep_intl = cm.get_int("monkey","sleep_time");
+    Monkey::floor_align = cm.get_int("monkey","floor_align");
 
     std::srand(std::time(nullptr));
     // pthread creation thing
@@ -281,6 +307,8 @@ int main()
                 window.close();
         }
 
+        frameTime = frameClock.restart();
+
         window.clear();
         // draw background
         window.draw(background_spr);
@@ -293,17 +321,23 @@ int main()
         }
         for (int i=0; i<MAX_MONKEY_COUNT; i++){
             if (monkey_set[i]->visible){
+                monkey_set[i]->sprite.update(frameTime);
                 window.draw(monkey_set[i]->sprite);
             }
         }
 
         // update text
         pthread_mutex_lock(&g_va_state_lock);
-        text_monkey_cl.setString("Macacos a Esq.: " + std::to_string(monkey_side_count[0]) );
-        text_monkey_cr.setString("Macacos a Dir..: " + std::to_string(monkey_side_count[1]) );
+        text_monkey_cl.setString("Elfos a Esq.: " + std::to_string(monkey_side_count[0]) );
+        text_monkey_cr.setString("Elfas a Dir..: " + std::to_string(monkey_side_count[1]) );
         pthread_mutex_unlock(&g_va_state_lock);
         window.draw(text_monkey_cl);
         window.draw(text_monkey_cr);
+
+        // update anim
+        p1WalkingAnim.update(frameTime);
+        window.draw(p1WalkingAnim);
+
 
         window.display();
 

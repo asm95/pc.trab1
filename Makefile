@@ -11,7 +11,7 @@ LDFLAGS=-g
 # add external static libs search path
 LDFLAGS+=-Letc/lib
 # add inih
-CLIBS+=-linih
+CLIBS+=-linih -lanim
 
 # peforming some system checks
 ifeq ($(OS),Windows_NT)
@@ -21,10 +21,11 @@ else
 endif
 
 # if the user only type make then everything will be compiled
-all: $(PROG_NAME) inith
+all: ext_libs $(PROG_NAME)
 
-inith:
+ext_libs:
 	$(MAKE) -C etc/ -f inih.mk static
+	$(MAKE) -C etc/ -f anim.mk static
 
 $(PROG_NAME): main.o
 	$(CXX) $(LDFLAGS) main.o -o $(PROG_NAME) $(CLIBS)
@@ -33,7 +34,7 @@ main.o: main.cpp
 	$(CXX) $(CFLAGS) -c main.cpp
 
 clear:
-	rm -f *.o $(PROG_NAME)
+	rm -f *.o $(PROG_NAME) etc/lib/* etc/obj/*
 
 pack:
 	chmod +x pack.sh
