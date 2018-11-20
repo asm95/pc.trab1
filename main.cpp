@@ -23,7 +23,6 @@
 #define APP_NAME "PC Toolbox"
 
 sf::Texture *monkey_texture_set[2];
-float init_pos[2] = {30.f, 540.f};
 
 class Monkey {
     public:
@@ -31,8 +30,8 @@ class Monkey {
             this->side = side;
             this->id = id;
             this->visible = false;
-            this->pos_x = init_pos[side];
-            this->speed = 90.f;
+            this->pos_x = door_stop[side];
+            this->speed = base_speed;
 
             sprite.setTexture(*monkey_texture_set[side]);
             sprite.setPosition(sf::Vector2f(this->pos_x, 160.f));
@@ -45,17 +44,20 @@ class Monkey {
         float speed;
         bool visible;
         sf::Sprite sprite;
+        static double door_stop[2];
+        static double base_speed;
+        static int sleep_intl;
 
         void walk(){
             printf("(I) Monkey %d,%d walking...\n", side, id);
             visible = true;
             if (side){
-                while(sprite.getPosition().x >= init_pos[0]){
-                    sprite.move(-speed, 0); os_sleep(500);
+                while(sprite.getPosition().x >= door_stop[0]){
+                    sprite.move(-speed, 0); os_sleep(sleep_intl);
                 }
             } else {
-                while(sprite.getPosition().x <= init_pos[1]){
-                    sprite.move(speed, 0); os_sleep(500);
+                while(sprite.getPosition().x <= door_stop[1]){
+                    sprite.move(speed, 0); os_sleep(sleep_intl);
                 }
             }
             visible = false;
@@ -64,7 +66,12 @@ class Monkey {
     private:
 };
 
+double Monkey::door_stop[] = {0};
+double Monkey::base_speed = 0;
+int Monkey::sleep_intl = 100;
+
 #define DOOR_COUNT 2
+#define BRIDGE_COUNT 2
 #define MAX_MONKEY_COUNT 10
 
 #define mlock pthread_mutex_lock
@@ -72,7 +79,7 @@ class Monkey {
 #define csignal pthread_cond_signal
 #define cwait pthread_cond_wait
 
-pthread_mutex_t g_bridge_lock[2];   // locks the bridge access for a side
+pthread_mutex_t g_bridge_lock[3];   // locks the bridge access for a side
 pthread_mutex_t g_va_state_lock, cond_lock, render_lock;           // locks a C global variable write access
 pthread_cond_t g_cond_okdest = PTHREAD_COND_INITIALIZER; //
 uint monkey_count[2] = {0};             // how many monkeys are waiting to switch side (if zero, the bridge is released)
@@ -93,7 +100,7 @@ void *monkey_loop(void *args){
     
     if (monkey_count[m->side] == 1){
         printf("Monkey %d,%d requesting for access...\n", m->side, m->id);
-        mlock(&g_bridge_lock[1-(m->side)]);            // than i lock the other side of the bridge
+        mlock(&g_bridge_lock[2]);
         printf(open_text, state_text[m->side], state_text[1-(m->side)]);
     }
     munlock(&g_bridge_lock[m->side]);
@@ -105,7 +112,7 @@ void *monkey_loop(void *args){
     m->walk();
     if (monkey_count[m->side] == 0){
         printf("(I) Monkey %d,%d checking all out...\n", m->side, m->id);
-        munlock(&g_bridge_lock[1-(m->side)]);
+        munlock(&g_bridge_lock[2]);
     }
     munlock(&g_bridge_lock[m->side]);
     printf("(I) Monkey %d,%d exiting...\n", m->side, m->id);
@@ -160,7 +167,6 @@ class ConfManager{
         sscanf(val.c_str(), "(%lf,%lf)", &x, &y);
         return sf::Vector2f(x,y);
     }
-
     double get_double(const char *sec, const char *var){
         std::string val = confHandler->Get(sec, var, "");
         assert_param_exists(val, sec, var);
@@ -168,6 +174,18 @@ class ConfManager{
         r = sscanf(val.c_str(), "%lf", &a);
         if (!r){
             throw std::runtime_error("Invalid real parameter ("
+                + std::string(sec) + "," + std::string(var) +
+                ") from " + file_path + "."
+            );
+        }
+        return a;
+    }
+    int get_int(const char *sec, const char *var){
+        std::string val = confHandler->Get(sec, var, "");
+        int a; int r;
+        r = sscanf(val.c_str(), "%d", &a);
+        if (!r){
+            throw std::runtime_error("Invalid integer parameter ("
                 + std::string(sec) + "," + std::string(var) +
                 ") from " + file_path + "."
             );
@@ -189,11 +207,12 @@ int main()
     ConfManager cm("conf.ini");
 
     // create object texture data
-    sf::Texture crystal_tex, heart_tex, door_tex, background_tex;
+    sf::Texture crystal_tex, heart_tex, door_tex, background_tex, plate_tex;
     load_sprite_tex(crystal_tex, "crystal.png");
     load_sprite_tex(heart_tex, "heart.png");
     load_sprite_tex(door_tex, "door.png");
     load_sprite_tex(background_tex, "background.png");
+    load_sprite_tex(plate_tex, "plate1.png");
 
     monkey_texture_set[0] = &crystal_tex;
     monkey_texture_set[1] = &heart_tex;
@@ -226,6 +245,21 @@ int main()
         doors_spr[i].setScale(sf::Vector2f(0.2f, 0.2f));
         cur_x += door_dist;
     }
+    // spawn bridge
+    sf::Sprite bridge_spr[BRIDGE_COUNT];
+    char sec_text[32];
+    for (int i=0; i<BRIDGE_COUNT; i++){
+        bridge_spr[i].setTexture(plate_tex);
+        sprintf(sec_text, "el%d_pos", i);
+        bridge_spr[i].setPosition(cm.get_pos("obj_bridge", sec_text));
+        bridge_spr[i].setScale(cm.get_pos("obj_bridge", "scale"));
+    }
+
+    // set monkey properties
+    Monkey::door_stop[0] = cm.get_double("monkey","doorL");
+    Monkey::door_stop[1] = cm.get_double("monkey","doorR");
+    Monkey::base_speed = cm.get_double("monkey","speed");
+    Monkey::sleep_intl = cm.get_int("monkey","sleep_time");
 
     std::srand(std::time(nullptr));
     // pthread creation thing
@@ -253,6 +287,9 @@ int main()
         // draw doors
         for (int i=0; i<DOOR_COUNT; i++){
             window.draw(doors_spr[i]);
+        }
+        for (int i=0; i<BRIDGE_COUNT; i++){
+            window.draw(bridge_spr[i]);
         }
         for (int i=0; i<MAX_MONKEY_COUNT; i++){
             if (monkey_set[i]->visible){
