@@ -28,16 +28,17 @@ Animation *monkey_anim_set[2];
 class Monkey {
     public:
         Monkey(int side, int id){
-            this->side = side;
+            this->side = -1;
             this->id = id;
             this->visible = false;
             this->pos_x = door_stop[side];
-            this->speed = base_speed;
+            this->speed = base_speed + rand() % (15);
 
             sprite.setFrameTime(sf::seconds(0.05));
-            sprite.play(*monkey_anim_set[side]);
             sprite.setPosition(sf::Vector2f(this->pos_x, floor_align));
-            sprite.setScale(sf::Vector2f(0.3f * (side ? 1 : -1), 0.3f));
+            sprite.play(*monkey_anim_set[side]);
+
+            setSide(side);
         };
         ~Monkey();
         int side;
@@ -52,6 +53,7 @@ class Monkey {
         static double floor_align;
 
         void walk(){
+            os_sleep( (rand()%3) * 1000 );
             printf("(I) Monkey %d,%d walking...\n", side, id);
             visible = true;
             if (side){
@@ -66,6 +68,13 @@ class Monkey {
             os_sleep(sleep_intl);
             visible = false;
             printf("(I) Monkey %d,%d stopped\n", side, id);
+        }
+        void setSide(int dest_side){
+            if (side == dest_side){
+                return;
+            }
+            sprite.setScale(sf::Vector2f(0.3f * (dest_side ? 1 : -1), 0.3f));
+            side = dest_side;
         }
     private:
 };
@@ -83,12 +92,14 @@ int Monkey::sleep_intl = 100;
 #define munlock pthread_mutex_unlock
 #define csignal pthread_cond_signal
 #define cwait pthread_cond_wait
+#define cbroadcast pthread_cond_broadcast
 
 pthread_mutex_t g_bridge_lock[3];   // locks the bridge access for a side
-pthread_mutex_t g_va_state_lock, cond_lock, render_lock;           // locks a C global variable write access
-pthread_cond_t g_cond_okdest = PTHREAD_COND_INITIALIZER; //
+pthread_mutex_t g_va_state_lock, g_cond_lock;           // locks a C global variable write access
+pthread_cond_t g_cond_turn[2] = {PTHREAD_COND_INITIALIZER}; //
 uint monkey_count[2] = {0};             // how many monkeys are waiting to switch side (if zero, the bridge is released)
 uint monkey_side_count[2] = {0};    // how many monkeys actually crossed the bridge until no one left
+uint current_side = -1;
 const char *open_text = "(I) Portal from %s to %s opened.\n";
 const char *transfer_text = "(I) Transfering %d monkeys from %s.\n";
 const char *state_text[2] = {AS_COLOR(COLOR_GREEN,"left"),AS_COLOR(COLOR_BLUE,"right")};
@@ -96,35 +107,50 @@ const char *state_text[2] = {AS_COLOR(COLOR_GREEN,"left"),AS_COLOR(COLOR_BLUE,"r
 void *monkey_loop(void *args){
     Monkey *m = (Monkey*)args;
 
-    mlock(&g_va_state_lock);
-    monkey_side_count[m->side] += 1;
-    munlock(&g_va_state_lock);
+    while(1){
+        mlock(&g_va_state_lock);
+        monkey_side_count[m->side] += 1;
+        munlock(&g_va_state_lock);
 
-    mlock(&g_bridge_lock[m->side]);
-    monkey_count[m->side] += 1;
-    
-    if (monkey_count[m->side] == 1){
-        printf("Monkey %d,%d requesting for access...\n", m->side, m->id);
-        mlock(&g_bridge_lock[2]);
-        printf(open_text, state_text[m->side], state_text[1-(m->side)]);
-    }
-    munlock(&g_bridge_lock[m->side]);
-    
-    printf("(I) Monkey from %d,%d will cross...\n", m->side, m->id);
-    mlock(&g_bridge_lock[m->side]);
-    printf("(I) Monkey from %d,%d is crossing...\n", m->side, m->id);
-    monkey_count[m->side] += -1;
-    m->walk();
-    if (monkey_count[m->side] == 0){
-        printf("(I) Monkey %d,%d checking all out...\n", m->side, m->id);
-        munlock(&g_bridge_lock[2]);
-    }
-    munlock(&g_bridge_lock[m->side]);
-    printf("(I) Monkey %d,%d exiting...\n", m->side, m->id);
+        while (rand()%2){
+            printf("(I) Monkey %d,%d decided to rest...\n", m->side, m->id);
+            mlock(&g_cond_lock);
+            if ( current_side != m->side ){
+                cwait(&g_cond_turn[m->side], &g_cond_lock);
+            }
+            munlock(&g_cond_lock);
+        }
 
-    mlock(&g_va_state_lock);
-    monkey_side_count[m->side] += -1;
-    munlock(&g_va_state_lock);
+        mlock(&g_bridge_lock[m->side]);
+        monkey_count[m->side] += 1;
+        
+        if (monkey_count[m->side] == 1){
+            printf("(I) Monkey %d,%d requesting for access...\n", m->side, m->id);
+            mlock(&g_bridge_lock[2]);
+            cbroadcast(&g_cond_turn[1-(m->side)]);
+            printf(open_text, state_text[m->side], state_text[1-(m->side)]);
+        }
+        munlock(&g_bridge_lock[m->side]);
+        
+        m->walk();
+        printf("(I) Monkey from %d,%d will cross...\n", m->side, m->id);
+        mlock(&g_bridge_lock[m->side]);
+        printf("(I) Monkey from %d,%d is crossing...\n", m->side, m->id);
+        monkey_count[m->side] += -1;
+        if (monkey_count[m->side] == 0){
+            printf("(I) Monkey %d,%d checking all out...\n", m->side, m->id);
+            current_side = 1-(m->side);
+            munlock(&g_bridge_lock[2]);
+        }
+        munlock(&g_bridge_lock[m->side]);
+        printf("(I) Monkey %d,%d exiting...\n", m->side, m->id);
+
+        mlock(&g_va_state_lock);
+        monkey_side_count[m->side] += -1;
+        munlock(&g_va_state_lock);
+
+        m->setSide(1-(m->side));
+    }
 
     pthread_exit(0);
 }
@@ -234,10 +260,6 @@ int main()
         p1Walking.addFrame(sf::IntRect(idx * 282, 0, 282, 350));
         p2Walking.addFrame(sf::IntRect(idx * 277, 0, 277, 347));
     }
-    AnimatedSprite p1WalkingAnim(sf::seconds(0.05));
-    AnimatedSprite p2WalkingAnim(sf::seconds(0.05));
-    //p1WalkingAnim.setPosition(sf::Vector2f(300, 300));
-    //p1WalkingAnim.setScale(sf::Vector2f(0.3f,0.3f));
 
     monkey_anim_set[0] = &p1Walking;
     monkey_anim_set[1] = &p2Walking;
@@ -328,15 +350,25 @@ int main()
 
         // update text
         pthread_mutex_lock(&g_va_state_lock);
-        text_monkey_cl.setString("Elfos a Esq.: " + std::to_string(monkey_side_count[0]) );
-        text_monkey_cr.setString("Elfas a Dir..: " + std::to_string(monkey_side_count[1]) );
+        std::string el_count_text[2]; bool first[2] = {true, true}; uint side;
+        el_count_text[0] = "Elfos a Esq.: (";
+        el_count_text[1] = "Elfas a Dir..: (";
+        for (i = 0; i < MAX_MONKEY_COUNT; i++) {
+            side = monkey_set[i]->side;
+            if (first[side]){
+                first[side] = false;
+            } else {
+                el_count_text[side] += ", ";
+            }
+            el_count_text[side] += std::to_string(i);
+        }
+        el_count_text[0] += ")";
+        el_count_text[1] += ")";
+        text_monkey_cl.setString(el_count_text[0]);
+        text_monkey_cr.setString(el_count_text[1]);
         pthread_mutex_unlock(&g_va_state_lock);
         window.draw(text_monkey_cl);
         window.draw(text_monkey_cr);
-
-        // update anim
-        p1WalkingAnim.update(frameTime);
-        window.draw(p1WalkingAnim);
 
 
         window.display();
