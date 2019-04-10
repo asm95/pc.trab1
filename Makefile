@@ -23,6 +23,9 @@ endif
 # if the user only type make then everything will be compiled
 all: ext_libs $(PROG_NAME)
 
+dist: CFLAGS+=-O2
+dist: all
+
 ext_libs:
 	$(MAKE) -C etc/ -f inih.mk static
 	$(MAKE) -C etc/ -f anim.mk static
